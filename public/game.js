@@ -26,27 +26,94 @@ const state = {
 
 // ── Canvas globals ────────────────────────────────────────────────────
 let canvas, ctx;
-let ftCanvas, ftCtx;  // free tile preview canvas
+let ftCanvas, ftCtx;
 let TILE_SZ = 70;
 let ARROW_SZ = 42;
 let _resizeHandler = null;
 
+// ── Animation state ───────────────────────────────────────────────────
+let animRunning = false;
+const playerOverrides = {}; // { playerId: {x,y} } pro animaci pohybu
+
+// ── Sounds (Web Audio API – žádné soubory) ────────────────────────────
+let _ac = null;
+function getAC() {
+  if (!_ac) _ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (_ac.state === 'suspended') _ac.resume();
+  return _ac;
+}
+function playPushSound() {
+  try {
+    const ac = getAC(); const dur = 0.45;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.exp(-i/(d.length*0.38));
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const bp = ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=160; bp.Q.value=0.7;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.38, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+dur);
+    src.connect(bp); bp.connect(g); g.connect(ac.destination);
+    src.start(); src.stop(ac.currentTime+dur);
+  } catch(_){}
+}
+function playTreasureSound() {
+  try {
+    const ac = getAC();
+    [523.25,659.25,783.99,1046.5].forEach((freq,i)=>{
+      const osc=ac.createOscillator(), g=ac.createGain();
+      osc.type='sine'; osc.frequency.value=freq;
+      const t0=ac.currentTime+i*0.1;
+      g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(0.22,t0+0.04);
+      g.gain.exponentialRampToValueAtTime(0.001,t0+0.85);
+      osc.connect(g); g.connect(ac.destination); osc.start(t0); osc.stop(t0+0.85);
+    });
+  } catch(_){}
+}
+function playFootstepSound() {
+  try {
+    const ac = getAC(); const dur = 0.11;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate*dur), ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,4);
+    const src=ac.createBufferSource(); src.buffer=buf;
+    const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=450;
+    const g=ac.createGain(); g.gain.value=0.45;
+    src.connect(lp); lp.connect(g); g.connect(ac.destination);
+    src.start(); src.stop(ac.currentTime+dur);
+  } catch(_){}
+}
+
 // ── Socket ────────────────────────────────────────────────────────────
 const socket = io();
 
+// Při každém (re)connect: pokud jsme uprostřed hry, zkusíme se automaticky vrátit
 socket.on('connect', () => {
-  // noop – wait for user action
+  updateConnBadge(true);
+  const saved = sessionStorage.getItem('labyrinth_session');
+  if (saved && state.gs) {          // reconnect uprostřed hry
+    try {
+      const { roomCode, playerId } = JSON.parse(saved);
+      socket.emit('rejoin-game', { roomCode, oldPlayerId: playerId });
+    } catch (_) {}
+  }
+});
+
+socket.on('disconnect', () => {
+  updateConnBadge(false);
 });
 
 socket.on('room-created', ({ roomCode, playerId }) => {
   state.myId = playerId;
   state.roomCode = roomCode;
   state.isHost = true;
+  sessionStorage.setItem('labyrinth_session', JSON.stringify({ roomCode, playerId }));
   showWaiting([{ id: playerId, name: getMyName() }]);
 });
 
 socket.on('room-joined', ({ playerId, players }) => {
   state.myId = playerId;
+  sessionStorage.setItem('labyrinth_session', JSON.stringify({ roomCode: state.roomCode, playerId }));
   renderWaitingPlayers(players);
   showScreen('waiting-screen');
   document.getElementById('display-room-code').textContent = state.roomCode;
@@ -75,7 +142,31 @@ socket.on('game-started', (gs) => {
 });
 
 socket.on('game-state', (gs) => {
+  const prev = state.gs;
   state.gs = gs;
+
+  if (prev && prev.phase === 'push' && gs.phase === 'move') {
+    playPushSound();
+    animatePush(prev, gs, () => { renderAll(); if (gs.winner) showWinner(gs); });
+    return;
+  }
+  if (prev && prev.phase === 'move' && (gs.phase === 'push' || gs.phase === 'ended')) {
+    let moved=null, fr=0, fc=0;
+    for (const p of gs.players) {
+      const pp = prev.players.find(x=>x.id===p.id);
+      if (pp && (p.row!==pp.row||p.col!==pp.col)) { moved=p; fr=pp.row; fc=pp.col; break; }
+    }
+    if (moved) {
+      const prevP = prev.players.find(x=>x.id===moved.id);
+      const gotTreasure = prevP && moved.collected > prevP.collected;
+      playFootstepSound();
+      animatePlayerMove(moved, fr, fc, gs, () => {
+        if (gotTreasure) playTreasureSound();
+        renderAll(); if (gs.winner) showWinner(gs);
+      });
+      return;
+    }
+  }
   renderAll();
   if (gs.winner) showWinner(gs);
 });
@@ -270,9 +361,12 @@ function renderBoard() {
     ctx.beginPath(); ctx.moveTo(p, as); ctx.lineTo(p, as + 7 * ts); ctx.stroke();
   }
 
-  // Player tokens (draw all)
+  // Player tokens
   for (const p of gs.players) {
-    drawPlayerToken(as + p.col * ts + ts / 2, as + p.row * ts + ts / 2, p.color, p.playerIndex + 1, ts);
+    const ov = playerOverrides[p.id];
+    const tx = ov ? ov.x : as + p.col * ts + ts / 2;
+    const ty = ov ? ov.y : as + p.row * ts + ts / 2;
+    drawPlayerToken(tx, ty, p.color, p.playerIndex + 1, ts);
   }
 
   // Push arrows
@@ -446,6 +540,71 @@ function drawTileLocal(lCtx, x, y, sz, tile) {
   }
 }
 
+// ── Animace posuvu dlaždic ────────────────────────────────────────────
+function animatePush(oldGs, newGs, onComplete) {
+  if (!canvas || animRunning) { renderAll(); onComplete?.(); return; }
+  animRunning = true;
+  const push = newGs.lastPush;
+  if (!push) { animRunning = false; renderAll(); onComplete?.(); return; }
+  const as = ARROW_SZ, ts = TILE_SZ;
+  const myTarget = newGs.players.find(p=>p.id===state.myId)?.currentTarget || null;
+  const DUR = 380, t0 = performance.now();
+  function frame(now) {
+    const raw = Math.min((now-t0)/DUR, 1);
+    const ease = 1 - Math.pow(1-raw, 2.5);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#111'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save(); ctx.beginPath(); ctx.rect(as,as,7*ts,7*ts); ctx.clip();
+    for (let r=0;r<7;r++) for (let c=0;c<7;c++) {
+      const aff = (push.type==='row'&&r===push.index)||(push.type==='col'&&c===push.index);
+      let dx=0, dy=0;
+      if (aff) {
+        const sl = ts*(1-ease);
+        if (push.type==='row') dx = push.dir==='right' ? -sl : sl;
+        else                   dy = push.dir==='down'  ? -sl : sl;
+      }
+      const tile = aff ? newGs.board[r][c] : oldGs.board[r][c];
+      if (!tile) continue;
+      drawTile(ctx, as+c*ts+dx, as+r*ts+dy, ts, tile, false, myTarget&&tile.treasure===myTarget);
+    }
+    const out = newGs.freeTile;
+    if (out) {
+      let ox,oy;
+      if (push.type==='row') {
+        oy=as+push.index*ts; ox=push.dir==='right' ? as+6*ts+ts*ease : as-ts*ease;
+      } else {
+        ox=as+push.index*ts; oy=push.dir==='down' ? as+6*ts+ts*ease : as-ts*ease;
+      }
+      drawTile(ctx,ox,oy,ts,out,false,false);
+    }
+    ctx.restore();
+    ctx.strokeStyle=BORDER_CLR; ctx.lineWidth=1;
+    for(let i=0;i<=7;i++){const p=as+i*ts;ctx.beginPath();ctx.moveTo(as,p);ctx.lineTo(as+7*ts,p);ctx.stroke();ctx.beginPath();ctx.moveTo(p,as);ctx.lineTo(p,as+7*ts);ctx.stroke();}
+    for(const p of newGs.players) drawPlayerToken(as+p.col*ts+ts/2,as+p.row*ts+ts/2,p.color,p.playerIndex+1,ts);
+    drawPushArrows(newGs);
+    if (raw<1) { requestAnimationFrame(frame); } else { animRunning=false; onComplete?.(); }
+  }
+  requestAnimationFrame(frame);
+}
+
+// ── Animace pohybu figurky ────────────────────────────────────────────
+function animatePlayerMove(movedP, fromRow, fromCol, gs, onComplete) {
+  if (!canvas || animRunning) { renderAll(); onComplete?.(); return; }
+  animRunning = true;
+  const as=ARROW_SZ, ts=TILE_SZ;
+  const fx=as+fromCol*ts+ts/2, fy=as+fromRow*ts+ts/2;
+  const tx=as+movedP.col*ts+ts/2, ty=as+movedP.row*ts+ts/2;
+  const DUR=300, t0=performance.now();
+  function frame(now) {
+    const raw=Math.min((now-t0)/DUR,1);
+    const ease=1-Math.pow(1-raw,3);
+    playerOverrides[movedP.id]={x:fx+(tx-fx)*ease, y:fy+(ty-fy)*ease};
+    renderBoard();
+    if (raw<1) { requestAnimationFrame(frame); } else { delete playerOverrides[movedP.id]; animRunning=false; onComplete?.(); }
+  }
+  requestAnimationFrame(frame);
+}
+
 // ── Side panel ────────────────────────────────────────────────────────
 function renderSidePanel() {
   const gs = state.gs;
@@ -593,6 +752,14 @@ function showWinner(gs) {
   banner.innerHTML = `<h2>🏆 Vítěz!</h2><p style="font-size:1.5em;margin-top:8px">${name}</p>
     <button class="btn btn-primary" style="margin-top:20px" onclick="location.reload()">Hrát znovu</button>`;
   banner.classList.remove('hidden');
+}
+
+// ── Connection badge ──────────────────────────────────────────────────
+function updateConnBadge(online) {
+  const el = document.getElementById('conn-badge');
+  if (!el) return;
+  el.textContent = online ? '● Online' : '⟳ Připojuji…';
+  el.style.color  = online ? '#2ecc71' : '#e74c3c';
 }
 
 // ── Init ──────────────────────────────────────────────────────────────

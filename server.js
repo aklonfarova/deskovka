@@ -7,7 +7,9 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' }
+  cors: { origin: '*' },
+  pingInterval: 20000,   // ping každých 20s – udržuje spojení přes Render proxy
+  pingTimeout: 40000,    // 40s na odpověď (výchozí je jen 20s)
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -300,7 +302,8 @@ function oppositeMove(type, index, dir) {
 
 // ─── Room/Game state management ─────────────────────────────────────────────
 
-const rooms = {}; // roomCode → room object
+const rooms = {};           // roomCode → room object
+const disconnectTimers = {}; // `${roomCode}:${playerId}` → setTimeout handle
 
 function generateRoomCode() {
   return Math.random().toString(36).substring(2, 7).toUpperCase();
@@ -570,47 +573,81 @@ io.on('connection', (socket) => {
     broadcastGameState(room);
   });
 
-  // Disconnect
+  // Rejoin po reconnectu – klient pošle roomCode a své staré playerId (= socket.id z minulé session)
+  socket.on('rejoin-game', ({ roomCode, oldPlayerId }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+
+    // Zruš čekající grace timer
+    const key = `${roomCode}:${oldPlayerId}`;
+    if (disconnectTimers[key]) {
+      clearTimeout(disconnectTimers[key]);
+      delete disconnectTimers[key];
+    }
+
+    // Najdi hráče podle starého ID a aktualizuj na nové socket.id
+    const rp = room.players.find(p => p.id === oldPlayerId);
+    if (!rp) return;
+
+    const newId = socket.id;
+    rp.id = newId;
+    if (room.hostId === oldPlayerId) room.hostId = newId;
+
+    if (room.gameState) {
+      const gp = room.gameState.players.find(p => p.id === oldPlayerId);
+      if (gp) gp.id = newId;
+    }
+
+    socket.join(roomCode);
+    socket.roomCode = roomCode;
+    socket.playerId = newId;
+
+    console.log(`Player rejoined ${roomCode}: ${oldPlayerId} → ${newId}`);
+
+    // Pošli aktuální stav hry
+    if (room.gameState) {
+      socket.emit('game-state', buildClientState(room.gameState, newId));
+    }
+  });
+
+  // Disconnect – grace period 30s, aby krátký výpadek neponičil hru
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
     const roomCode = socket.roomCode;
+    const playerId = socket.playerId || socket.id;
     if (!roomCode) return;
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Remove player from room
-    room.players = room.players.filter(p => p.id !== socket.id);
+    const key = `${roomCode}:${playerId}`;
+    if (disconnectTimers[key]) clearTimeout(disconnectTimers[key]);
 
-    if (room.players.length === 0) {
-      delete rooms[roomCode];
-      return;
-    }
+    disconnectTimers[key] = setTimeout(() => {
+      delete disconnectTimers[key];
 
-    // Transfer host if needed
-    if (room.hostId === socket.id) {
-      room.hostId = room.players[0].id;
-    }
+      // Ověř, že hráč se mezitím nevrátil (rejoin by aktualizoval room.players[x].id)
+      const stillPresent = room.players.find(p => p.id === playerId);
+      if (!stillPresent) return;
 
-    if (room.gameState && room.started) {
-      // Remove from game state
-      const pIdx = room.gameState.players.findIndex(p => p.id === socket.id);
-      if (pIdx !== -1) {
-        room.gameState.players.splice(pIdx, 1);
-        // Fix currentPlayerIndex
-        if (room.gameState.players.length === 0) {
-          delete rooms[roomCode];
-          return;
+      room.players = room.players.filter(p => p.id !== playerId);
+      if (room.players.length === 0) { delete rooms[roomCode]; return; }
+      if (room.hostId === playerId) room.hostId = room.players[0].id;
+
+      if (room.gameState && room.started) {
+        const pIdx = room.gameState.players.findIndex(p => p.id === playerId);
+        if (pIdx !== -1) {
+          room.gameState.players.splice(pIdx, 1);
+          if (room.gameState.players.length === 0) { delete rooms[roomCode]; return; }
+          if (room.gameState.currentPlayerIndex >= room.gameState.players.length) {
+            room.gameState.currentPlayerIndex = 0;
+          }
+          room.gameState.players.forEach((p, i) => { p.playerIndex = i; });
         }
-        if (room.gameState.currentPlayerIndex >= room.gameState.players.length) {
-          room.gameState.currentPlayerIndex = 0;
-        }
-        // Reassign playerIndex
-        room.gameState.players.forEach((p, i) => { p.playerIndex = i; });
+        broadcastGameState(room);
+      } else {
+        io.to(roomCode).emit('player-joined', { players: room.players });
       }
-      broadcastGameState(room);
-    } else {
-      io.to(roomCode).emit('player-joined', { players: room.players });
-    }
+    }, 30000); // 30s grace period
   });
 });
 
