@@ -604,6 +604,9 @@ io.on('connection', (socket) => {
 
     console.log(`Player rejoined ${roomCode}: ${oldPlayerId} → ${newId}`);
 
+    // Informuj klienta o novém ID (musí aktualizovat state.myId)
+    socket.emit('rejoin-confirmed', { playerId: newId });
+
     // Pošli aktuální stav hry
     if (room.gameState) {
       socket.emit('game-state', buildClientState(room.gameState, newId));

@@ -87,16 +87,26 @@ function playFootstepSound() {
 // ── Socket ────────────────────────────────────────────────────────────
 const socket = io();
 
-// Při každém (re)connect: pokud jsme uprostřed hry, zkusíme se automaticky vrátit
+// Při každém (re)connect: pokud máme uloženou session, zkusíme se vrátit
+// (platí jak pro hru, tak pro čekárnu)
 socket.on('connect', () => {
   updateConnBadge(true);
   const saved = sessionStorage.getItem('labyrinth_session');
-  if (saved && state.gs) {          // reconnect uprostřed hry
+  if (saved && state.roomCode) {   // state.roomCode je nastaven po vstupu do místnosti
     try {
       const { roomCode, playerId } = JSON.parse(saved);
-      socket.emit('rejoin-game', { roomCode, oldPlayerId: playerId });
+      if (roomCode === state.roomCode) {
+        socket.emit('rejoin-game', { roomCode, oldPlayerId: playerId });
+      }
     } catch (_) {}
   }
+});
+
+// Server potvrdil rejoin a vrátil nové playerId – aktualizujeme lokální stav
+socket.on('rejoin-confirmed', ({ playerId }) => {
+  state.myId = playerId;
+  sessionStorage.setItem('labyrinth_session',
+    JSON.stringify({ roomCode: state.roomCode, playerId }));
 });
 
 socket.on('disconnect', () => {
