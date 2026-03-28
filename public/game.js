@@ -300,28 +300,21 @@ function drawTile(ctx, x, y, sz, tile, reachable, isTarget) {
   if (S) ctx.fillRect(Math.round(cx - cw / 2), Math.round(cy - cw / 2), cw, Math.round(sz / 2 + cw / 2));
   if (W) ctx.fillRect(x, Math.round(cy - cw / 2), Math.round(sz / 2 + cw / 2), cw);
 
-  // Reachable highlight overlay (blue tint on walls)
+  // Reachable highlight: only border, no fill overlay
   if (reachable) {
-    ctx.fillStyle = 'rgba(30,120,255,0.12)';
-    ctx.fillRect(x, y, sz, sz);
-    ctx.strokeStyle = 'rgba(60,140,255,0.85)';
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(60,140,255,0.9)';
+    ctx.lineWidth = 3;
     ctx.strokeRect(x + 1.5, y + 1.5, sz - 3, sz - 3);
   }
 
-  // Target treasure highlight: golden glow
+  // Target treasure highlight: only golden border, no fill overlay
   if (isTarget) {
-    // Outer soft glow
-    ctx.strokeStyle = 'rgba(255,215,0,0.35)';
+    ctx.strokeStyle = 'rgba(255,215,0,0.4)';
     ctx.lineWidth = 8;
     ctx.strokeRect(x + 1, y + 1, sz - 2, sz - 2);
-    // Bright inner border
     ctx.strokeStyle = '#FFD700';
     ctx.lineWidth = 3;
-    ctx.strokeRect(x + 3, y + 3, sz - 6, sz - 6);
-    // Subtle golden fill on white walls
-    ctx.fillStyle = 'rgba(255,215,0,0.12)';
-    ctx.fillRect(x, y, sz, sz);
+    ctx.strokeRect(x + 4, y + 4, sz - 8, sz - 8);
   }
 
   // Treasure emoji
