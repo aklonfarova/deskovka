@@ -29,6 +29,7 @@ let canvas, ctx;
 let ftCanvas, ftCtx;  // free tile preview canvas
 let TILE_SZ = 70;
 let ARROW_SZ = 42;
+let _resizeHandler = null;
 
 // ── Socket ────────────────────────────────────────────────────────────
 const socket = io();
@@ -175,19 +176,31 @@ function initGameCanvas() {
   ftCanvas = document.getElementById('free-tile-canvas');
   ftCtx = ftCanvas.getContext('2d');
 
-  // Responsive tile size
-  const boardWrapper = document.querySelector('.board-wrapper');
-  const maxW = (boardWrapper ? boardWrapper.clientWidth : window.innerWidth - 220) - 20;
-  const maxH = window.innerHeight - 80;
-  const available = Math.min(maxW, maxH);
-  ARROW_SZ = Math.floor(available / 10);
-  TILE_SZ = Math.floor((available - ARROW_SZ * 2) / 7);
-  TILE_SZ = Math.max(48, Math.min(85, TILE_SZ));
-  ARROW_SZ = Math.floor(TILE_SZ * 0.55);
+  const resizeCanvas = () => {
+    const boardWrapper = document.querySelector('.board-wrapper');
+    const panelW = document.querySelector('.right-panel')?.offsetWidth || 180;
+    const maxW = (boardWrapper ? boardWrapper.clientWidth : window.innerWidth - panelW) - 8;
+    const maxH = window.innerHeight - 52;  // subtract top bar height only
+    const available = Math.min(maxW, maxH);
+    ARROW_SZ = Math.floor(available / 10);
+    TILE_SZ = Math.floor((available - ARROW_SZ * 2) / 7);
+    TILE_SZ = Math.max(50, Math.min(105, TILE_SZ));  // allow up to 105px tiles
+    ARROW_SZ = Math.floor(TILE_SZ * 0.55);
 
-  const sz = ARROW_SZ * 2 + TILE_SZ * 7;
-  canvas.width = sz;
-  canvas.height = sz;
+    const sz = ARROW_SZ * 2 + TILE_SZ * 7;
+    canvas.width = sz;
+    canvas.height = sz;
+
+    if (state.gs) renderAll();
+  };
+
+  // Run after layout is painted
+  requestAnimationFrame(() => { requestAnimationFrame(resizeCanvas); });
+
+  // Re-calculate on window resize
+  if (_resizeHandler) window.removeEventListener('resize', _resizeHandler);
+  _resizeHandler = resizeCanvas;
+  window.addEventListener('resize', _resizeHandler);
 
   canvas.addEventListener('click', onCanvasClick);
   canvas.addEventListener('touchend', e => {
@@ -213,10 +226,10 @@ function renderAll() {
 }
 
 // ── Board rendering ───────────────────────────────────────────────────
-const WALL_CLR    = '#2d1a0e';
-const PATH_CLR    = '#c8903a';
-const PATH_LITE   = '#e0b060';   // reachable highlight
-const BORDER_CLR  = '#1a0a05';
+const WALL_CLR    = '#f5f0e0';   // tile background: creamy white
+const PATH_CLR    = '#7B3F00';   // corridor: dark brown
+const PATH_LITE   = '#A0522D';   // reachable corridor: lighter brown
+const BORDER_CLR  = '#000000';   // grid lines: black
 const ARROW_ACT   = '#f0e060';
 const ARROW_DIM   = '#4a4a4a';
 const ARROW_FORBD = '#2a2a2a';
@@ -231,6 +244,10 @@ function renderBoard() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  // Determine target treasure for current player
+  const myPlayer = gs.players.find(p => p.id === state.myId);
+  const myTarget = myPlayer?.currentTarget || null;
+
   // Board tiles
   for (let r = 0; r < 7; r++) {
     for (let c = 0; c < 7; c++) {
@@ -239,7 +256,8 @@ function renderBoard() {
       const x = as + c * ts;
       const y = as + r * ts;
       const reach = gs.reachable && gs.reachable[r][c];
-      drawTile(ctx, x, y, ts, tile, reach);
+      const isTarget = myTarget && tile.treasure === myTarget;
+      drawTile(ctx, x, y, ts, tile, reach, isTarget);
     }
   }
 
@@ -261,17 +279,17 @@ function renderBoard() {
   drawPushArrows(gs);
 }
 
-function drawTile(ctx, x, y, sz, tile, reachable) {
+function drawTile(ctx, x, y, sz, tile, reachable, isTarget) {
   const cw = Math.floor(sz * 0.36);  // corridor width
   const cx = x + sz / 2;
   const cy = y + sz / 2;
   const [N, E, S, W] = tile.openings;
 
-  // Wall background
+  // Tile background: white
   ctx.fillStyle = WALL_CLR;
   ctx.fillRect(x, y, sz, sz);
 
-  // Corridor fill
+  // Corridor fill: brown (lighter if reachable)
   ctx.fillStyle = reachable ? PATH_LITE : PATH_CLR;
 
   // Center square
@@ -282,13 +300,28 @@ function drawTile(ctx, x, y, sz, tile, reachable) {
   if (S) ctx.fillRect(Math.round(cx - cw / 2), Math.round(cy - cw / 2), cw, Math.round(sz / 2 + cw / 2));
   if (W) ctx.fillRect(x, Math.round(cy - cw / 2), Math.round(sz / 2 + cw / 2), cw);
 
-  // Reachable highlight overlay
+  // Reachable highlight overlay (blue tint on walls)
   if (reachable) {
-    ctx.fillStyle = 'rgba(80,160,255,0.18)';
+    ctx.fillStyle = 'rgba(30,120,255,0.12)';
     ctx.fillRect(x, y, sz, sz);
-    ctx.strokeStyle = 'rgba(80,160,255,0.7)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(60,140,255,0.85)';
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(x + 1.5, y + 1.5, sz - 3, sz - 3);
+  }
+
+  // Target treasure highlight: golden glow
+  if (isTarget) {
+    // Outer soft glow
+    ctx.strokeStyle = 'rgba(255,215,0,0.35)';
+    ctx.lineWidth = 8;
     ctx.strokeRect(x + 1, y + 1, sz - 2, sz - 2);
+    // Bright inner border
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x + 3, y + 3, sz - 6, sz - 6);
+    // Subtle golden fill on white walls
+    ctx.fillStyle = 'rgba(255,215,0,0.12)';
+    ctx.fillRect(x, y, sz, sz);
   }
 
   // Treasure emoji
@@ -391,20 +424,19 @@ function renderFreeTile() {
   ftCanvas.height = sz;
   ftCtx.clearRect(0, 0, sz, sz);
 
-  // Temporarily use local ctx/sz for drawTile
-  drawTileLocal(ftCtx, 0, 0, sz, gs.freeTile, false);
+  drawTileLocal(ftCtx, 0, 0, sz, gs.freeTile);
 }
 
-function drawTileLocal(lCtx, x, y, sz, tile, reachable) {
+function drawTileLocal(lCtx, x, y, sz, tile) {
   const cw = Math.floor(sz * 0.36);
   const cx = x + sz / 2;
   const cy = y + sz / 2;
   const [N, E, S, W] = tile.openings;
 
-  lCtx.fillStyle = WALL_CLR;
+  lCtx.fillStyle = WALL_CLR;   // white tile
   lCtx.fillRect(x, y, sz, sz);
 
-  lCtx.fillStyle = PATH_CLR;
+  lCtx.fillStyle = PATH_CLR;   // brown corridors
   lCtx.fillRect(Math.round(cx - cw / 2), Math.round(cy - cw / 2), cw, cw);
   if (N) lCtx.fillRect(Math.round(cx - cw / 2), y, cw, Math.round(sz / 2 + cw / 2));
   if (E) lCtx.fillRect(Math.round(cx - cw / 2), Math.round(cy - cw / 2), Math.round(sz / 2 + cw / 2), cw);
