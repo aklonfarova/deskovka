@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Labyrint - Desková Hra</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- LOBBY SCREEN -->
+  <div id="lobby-screen" class="screen active">
+    <div class="lobby-container">
+      <h1 class="game-title">🗺️ Labyrint</h1>
+      <p class="game-subtitle">Multiplayer desková hra pro 2–4 hráče</p>
+
+      <div class="lobby-card">
+        <div class="input-group">
+          <label for="player-name">Tvoje jméno</label>
+          <input type="text" id="player-name" placeholder="Zadej jméno..." maxlength="20" autocomplete="off">
+        </div>
+
+        <div class="lobby-tabs">
+          <button class="tab-btn active" data-tab="create">Vytvořit místnost</button>
+          <button class="tab-btn" data-tab="join">Připojit se</button>
+        </div>
+
+        <div id="tab-create" class="tab-content active">
+          <button id="create-room-btn" class="btn btn-primary btn-large">Vytvořit novou hru</button>
+        </div>
+
+        <div id="tab-join" class="tab-content">
+          <div class="input-group">
+            <label for="room-code-input">Kód místnosti</label>
+            <input type="text" id="room-code-input" placeholder="Např. AB12C" maxlength="5" autocomplete="off"
+                   style="text-transform:uppercase; letter-spacing: 4px; font-size: 1.4em;">
+          </div>
+          <button id="join-room-btn" class="btn btn-secondary btn-large">Připojit se</button>
+        </div>
+
+        <div id="lobby-error" class="error-msg hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WAITING ROOM SCREEN -->
+  <div id="waiting-screen" class="screen">
+    <div class="waiting-container">
+      <h2>Čekárna</h2>
+      <div class="room-code-display">
+        Kód místnosti: <span id="display-room-code" class="code-badge"></span>
+        <button id="copy-code-btn" class="btn btn-small" title="Zkopírovat kód">📋</button>
+      </div>
+      <p class="waiting-hint">Sdílej kód s přáteli (2–4 hráči)</p>
+
+      <div id="player-list" class="player-list"></div>
+
+      <button id="start-game-btn" class="btn btn-primary btn-large hidden">Spustit hru</button>
+      <p id="waiting-status" class="waiting-status">Čekám na dalšího hráče...</p>
+    </div>
+  </div>
+
+  <!-- GAME SCREEN -->
+  <div id="game-screen" class="screen">
+    <div class="game-layout">
+
+      <!-- TOP BAR -->
+      <div class="top-bar">
+        <div class="room-info">
+          Místnost: <strong id="game-room-code"></strong>
+        </div>
+        <div id="turn-indicator" class="turn-indicator">
+          Čeká na hru...
+        </div>
+        <div id="winner-banner" class="winner-banner hidden"></div>
+      </div>
+
+      <!-- MAIN AREA -->
+      <div class="main-area">
+
+        <!-- BOARD AREA (canvas + arrows) -->
+        <div class="board-wrapper">
+          <canvas id="game-canvas"></canvas>
+        </div>
+
+        <!-- RIGHT PANEL -->
+        <div class="right-panel">
+          <div class="panel-section">
+            <h3>Volná dlaždice</h3>
+            <canvas id="free-tile-canvas" width="120" height="120"></canvas>
+            <button id="rotate-btn" class="btn btn-secondary">↻ Otočit</button>
+          </div>
+
+          <div class="panel-section treasure-section">
+            <h3>Hledej</h3>
+            <div id="current-treasure" class="treasure-display">
+              <div class="treasure-emoji" id="treasure-emoji">?</div>
+              <div class="treasure-name" id="treasure-name">—</div>
+            </div>
+            <div class="cards-remaining">
+              Zbývá karet: <strong id="cards-remaining">—</strong>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h3>Hráči</h3>
+            <div id="players-status" class="players-status"></div>
+          </div>
+
+          <div class="panel-section">
+            <div id="phase-hint" class="phase-hint"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
