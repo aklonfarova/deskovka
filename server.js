@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -305,6 +306,53 @@ function oppositeMove(type, index, dir) {
 const rooms = {};           // roomCode → room object
 const disconnectTimers = {}; // `${roomCode}:${playerId}` → setTimeout handle
 
+// ─── Persistence ──────────────────────────────────────────────────────────────
+const STATE_FILE = path.join(__dirname, 'game-state.json');
+const GAME_TTL_MS = 6 * 60 * 60 * 1000; // zahodit uložené hry starší 6 hodin
+
+function loadPersistedRooms() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return;
+    const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    const now = Date.now();
+    let count = 0;
+    for (const [code, room] of Object.entries(saved)) {
+      if (room.savedAt && (now - room.savedAt) > GAME_TTL_MS) continue;
+      rooms[code] = { ...room, disconnectTimers: {} };
+      count++;
+    }
+    if (count > 0) console.log(`Obnoveno ${count} her z disku`);
+  } catch (e) {
+    console.error('Nelze načíst uložený stav:', e.message);
+  }
+}
+
+let _persistTimer = null;
+function schedulePersist() {
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    try {
+      const toSave = {};
+      for (const [code, room] of Object.entries(rooms)) {
+        if (!room.started || !room.gameState) continue;
+        toSave[code] = {
+          code: room.code,
+          hostId: room.hostId,
+          players: room.players,
+          gameState: room.gameState,
+          started: room.started,
+          savedAt: Date.now(),
+        };
+      }
+      fs.writeFileSync(STATE_FILE, JSON.stringify(toSave));
+    } catch (e) {
+      console.error('Nelze uložit stav:', e.message);
+    }
+  }, 1500); // debounce – max 1 zápis za 1.5s
+}
+
+loadPersistedRooms();
+
 function generateRoomCode() {
   return Math.random().toString(36).substring(2, 7).toUpperCase();
 }
@@ -445,6 +493,7 @@ io.on('connection', (socket) => {
       }
     }
     console.log(`Game started in room ${roomCode}`);
+    schedulePersist();
   });
 
   // Rotate free tile
@@ -577,7 +626,7 @@ io.on('connection', (socket) => {
   socket.on('rejoin-game', ({ roomCode, oldPlayerId }) => {
     const room = rooms[roomCode];
     if (!room) {
-      socket.emit('rejoin-failed', { reason: 'Server byl restartován a hra skončila. Prosím začni novou hru.' });
+      socket.emit('rejoin-failed', { reason: 'Hru se nepodařilo obnovit (stav byl ztracen). Prosím začni novou hru.' });
       return;
     }
 
@@ -667,6 +716,7 @@ function broadcastGameState(room) {
       clientSocket.emit('game-state', buildClientState(room.gameState, p.id));
     }
   }
+  schedulePersist(); // uložit stav po každé změně
 }
 
 server.listen(PORT, () => {

@@ -114,9 +114,9 @@ socket.on('connect', () => {
       const { roomCode, playerId } = JSON.parse(saved);
       if (roomCode === state.roomCode) {
         socket.emit('rejoin-game', { roomCode, oldPlayerId: playerId });
-        // Pokud server do 6s neodpoví, hra je ztracena (server restartoval)
+        // Pokud server do 10s neodpoví, hra nemohla být obnovena
         _rejoinTimer = setTimeout(() =>
-          _rejoinFailed('Server byl restartován a hra skončila. Prosím začni novou hru.'), 6000);
+          _rejoinFailed('Hru se nepodařilo obnovit (stav byl ztracen). Prosím začni novou hru.'), 10000);
       }
     } catch (_) {}
   }
