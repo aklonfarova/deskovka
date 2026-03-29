@@ -576,7 +576,10 @@ io.on('connection', (socket) => {
   // Rejoin po reconnectu – klient pošle roomCode a své staré playerId (= socket.id z minulé session)
   socket.on('rejoin-game', ({ roomCode, oldPlayerId }) => {
     const room = rooms[roomCode];
-    if (!room) return;
+    if (!room) {
+      socket.emit('rejoin-failed', { reason: 'Server byl restartován a hra skončila. Prosím začni novou hru.' });
+      return;
+    }
 
     // Zruš čekající grace timer
     const key = `${roomCode}:${oldPlayerId}`;
@@ -587,7 +590,10 @@ io.on('connection', (socket) => {
 
     // Najdi hráče podle starého ID a aktualizuj na nové socket.id
     const rp = room.players.find(p => p.id === oldPlayerId);
-    if (!rp) return;
+    if (!rp) {
+      socket.emit('rejoin-failed', { reason: 'Hráč nenalezen. Prosím připoj se znovu.' });
+      return;
+    }
 
     const newId = socket.id;
     rp.id = newId;

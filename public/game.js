@@ -87,31 +87,53 @@ function playFootstepSound() {
 // ── Socket ────────────────────────────────────────────────────────────
 const socket = io();
 
-// Při každém (re)connect: pokud máme uloženou session, zkusíme se vrátit
-// (platí jak pro hru, tak pro čekárnu)
+let _rejoinTimer = null;
+
+function _clearRejoinTimer() {
+  if (_rejoinTimer) { clearTimeout(_rejoinTimer); _rejoinTimer = null; }
+}
+
+function _rejoinFailed(reason) {
+  _clearRejoinTimer();
+  sessionStorage.removeItem('labyrinth_session');
+  state.gs = null; state.roomCode = null; state.myId = null; state.isHost = false;
+  showScreen('lobby-screen');
+  const el = document.getElementById('lobby-error');
+  if (el) {
+    el.textContent = reason || 'Spojení bylo přerušeno. Prosím začni novou hru.';
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 10000);
+  }
+}
+
 socket.on('connect', () => {
   updateConnBadge(true);
   const saved = sessionStorage.getItem('labyrinth_session');
-  if (saved && state.roomCode) {   // state.roomCode je nastaven po vstupu do místnosti
+  if (saved && state.roomCode) {
     try {
       const { roomCode, playerId } = JSON.parse(saved);
       if (roomCode === state.roomCode) {
         socket.emit('rejoin-game', { roomCode, oldPlayerId: playerId });
+        // Pokud server do 6s neodpoví, hra je ztracena (server restartoval)
+        _rejoinTimer = setTimeout(() =>
+          _rejoinFailed('Server byl restartován a hra skončila. Prosím začni novou hru.'), 6000);
       }
     } catch (_) {}
   }
 });
 
-// Server potvrdil rejoin a vrátil nové playerId – aktualizujeme lokální stav
+socket.on('disconnect', () => { updateConnBadge(false); });
+
+// Server potvrdil rejoin – aktualizujeme state.myId
 socket.on('rejoin-confirmed', ({ playerId }) => {
+  _clearRejoinTimer();
   state.myId = playerId;
   sessionStorage.setItem('labyrinth_session',
     JSON.stringify({ roomCode: state.roomCode, playerId }));
 });
 
-socket.on('disconnect', () => {
-  updateConnBadge(false);
-});
+// Server explicitně odmítl rejoin (místnost neexistuje / hráč nenalezen)
+socket.on('rejoin-failed', ({ reason }) => { _rejoinFailed(reason); });
 
 socket.on('room-created', ({ roomCode, playerId }) => {
   state.myId = playerId;
@@ -152,6 +174,7 @@ socket.on('game-started', (gs) => {
 });
 
 socket.on('game-state', (gs) => {
+  _clearRejoinTimer(); // game-state = rejoin úspěšný
   const prev = state.gs;
   state.gs = gs;
 
